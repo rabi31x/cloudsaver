@@ -1,6 +1,6 @@
 import React, { useState } from "react";
-import UploadView from "./UploadView";
-import DashboardView from "./DashboardView";
+import UploadView from "./pages/UploadView";
+import DashboardView from "./pages/DashboardView";
 
 function App() {
   const [step, setStep] = useState("upload"); // 'upload' | 'dashboard'
