@@ -18,7 +18,6 @@ export default function UploadView({ onAnalyzeSuccess }) {
 
   const handleFiles = (fileList) => {
     const arr = Array.from(fileList);
-    // CSV만 필터링
     const csvFiles = arr.filter(
       (f) => f.type === "text/csv" || f.name.toLowerCase().endsWith(".csv")
     );
@@ -97,7 +96,6 @@ export default function UploadView({ onAnalyzeSuccess }) {
 
   return (
     <div style={S.container}>
-      {/* 제목 & 설명 */}
       <h2 style={S.title}>Cloud list</h2>
       <div style={S.subtitle}>
         분석이 가능한 클라우드 리스트입니다. 사용 중인 클라우드를 선택할 필요 없이,
@@ -138,7 +136,6 @@ export default function UploadView({ onAnalyzeSuccess }) {
           파일 선택 버튼을 누르거나, 이 영역으로 드래그 앤 드롭할 수 있습니다.
         </div>
 
-        {/* 실제 input은 숨겨두고 ref로 제어 */}
         <input
           ref={fileInputRef}
           type="file"
@@ -148,7 +145,6 @@ export default function UploadView({ onAnalyzeSuccess }) {
           style={{ display: "none" }}
         />
 
-        {/* 보조용 파일 선택 버튼 */}
         <button
           type="button"
           onClick={(e) => {

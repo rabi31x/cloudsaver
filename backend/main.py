@@ -9,9 +9,6 @@ from fpdf import FPDF # 👈 FPDF 라이브러리 임포트 추가
 import pandas as pd
 import math
 
-# --------------------------------------
-# FastAPI 기본 세팅
-# --------------------------------------
 app = FastAPI(
 title="CloudSaver (CS) Backend",
 description="멀티 클라우드 비용 CSV를 분석해서 절감 제안을 반환하는 API",
@@ -21,18 +18,16 @@ version="0.1.0",
 # 프론트엔드 도메인 허용 (개발용)
 app.add_middleware(
 CORSMiddleware,
-allow_origins=["http://localhost:3000"], # React 개발 서버
+allow_origins=["http://localhost:3000"], 
 allow_credentials=True,
 allow_methods=["*"],
 allow_headers=["*"],
 )
 
 
-# --------------------------------------
+
 # Pydantic 모델 (응답 스키마)
-# --------------------------------------
 class Suggestion(BaseModel):
-# ... (Suggestion 클래스 정의는 유지)
     cloud: str
     category: str
     service: str
@@ -41,23 +36,19 @@ class Suggestion(BaseModel):
     reason: str
     current_cost: float
     estimated_saving: float
-    source: str # 파일명 (aws / azure / gcp 등)
-    priority: str # HIGH / MEDIUM / LOW
+    source: str # 파일명 (aws / azure / gcp)
+    priority: str 
 
 
 class AnalyzeResponse(BaseModel):
-# ... (AnalyzeResponse 클래스 정의는 유지)
     summary: dict
     by_cloud: dict
     by_category: dict
     suggestions: List[Suggestion]
 
 
-# --------------------------------------
-# 유틸 함수들
-# ... (_infer_cloud_from_filename, _infer_category, _find_cost_column, _safe_float 함수는 유지)
-# --------------------------------------
 
+# 유틸 함수들
 def _infer_cloud_from_filename(filename: str) -> str:
     name = filename.lower()
     if "aws" in name:
@@ -95,14 +86,12 @@ def _safe_float(x) -> float:
         return 0.0
 
 
-# --------------------------------------
-# 핵심: 절감 규칙 적용 함수
-# ... (apply_rules 함수는 유지)
-# --------------------------------------
+
+# 절감 규칙 적용 함수
 def apply_rules(df: pd.DataFrame) -> List[Suggestion]:
     suggestions: List[Suggestion] = []
 
-    # 1) 저활용 컴퓨트 다운사이징 (R1)
+    # 저활용 컴퓨트 다운사이징 (R1)
     if {"category", "cpu_avg", "days", "cost"}.issubset(df.columns):
         mask = (df["category"] == "COMPUTE") & (df["cpu_avg"] < 3) & (df["days"] >= 7)
 
@@ -125,7 +114,7 @@ def apply_rules(df: pd.DataFrame) -> List[Suggestion]:
                 )
             )
 
-    # 2) 미사용 스토리지 삭제 (R2)
+    # 미사용 스토리지 삭제 (R2)
     if {"category", "storage_idle_days", "cost"}.issubset(df.columns):
         mask = (df["category"] == "STORAGE") & (df["storage_idle_days"] >= 30)
 
@@ -148,7 +137,7 @@ def apply_rules(df: pd.DataFrame) -> List[Suggestion]:
                 )
             )
 
-    # 3) 장기 미접근 Object Storage 아카이브 (R3)
+    # 장기 미접근 Object Storage 아카이브 (R3)
     if {"category", "storage_idle_days", "cost", "storage_class"}.issubset(df.columns):
         mask = (
             (df["category"] == "STORAGE")
@@ -175,7 +164,7 @@ def apply_rules(df: pd.DataFrame) -> List[Suggestion]:
                 )
             )
 
-    # 4) 일정 비용 이상 On-Demand → 할인 요금제 전환 (R4)
+    # 일정 비용 이상 On-Demand → 할인 요금제 전환 (R4)
     if {"discount_type", "cost"}.issubset(df.columns):
         mask = (df["discount_type"].str.upper() == "ONDEMAND") & (df["cost"] >= 50)
 
@@ -201,20 +190,16 @@ def apply_rules(df: pd.DataFrame) -> List[Suggestion]:
     return suggestions
 
 
-# --------------------------------------
+
 # 루트 체크용
-# --------------------------------------
 @app.get("/")
 def read_root():
     return {"message": "CloudSaver (CS) backend running"}
 
 
-# --------------------------------------
 # 메인 분석 엔드포인트
-# --------------------------------------
 @app.post("/analyze", response_model=AnalyzeResponse)
 async def analyze(files: List[UploadFile] = File(...)):
-# ... (analyze 함수 내용은 유지)
     if not files:
         raise HTTPException(status_code=400, detail="CSV 파일을 하나 이상 업로드해주세요.")
 
@@ -224,10 +209,9 @@ async def analyze(files: List[UploadFile] = File(...)):
     for f in files:
         raw = await f.read()
         try:
-            # utf-8-sig로 BOM 문제도 같이 해결
             text = raw.decode("utf-8-sig")
         except UnicodeDecodeError:
-            text = raw.decode("cp949")  # 혹시 모를 한글 인코딩
+            text = raw.decode("cp949")  # 한글 인코딩
 
         df = pd.read_csv(StringIO(text))
 
@@ -336,9 +320,7 @@ async def analyze(files: List[UploadFile] = File(...)):
     return response
 
 
-# --------------------------------------
 # PDF 생성 로직
-# --------------------------------------
 # main.py 파일 내 create_pdf_report 함수 수정 (전체)
 
 def create_pdf_report(suggestions: List[Suggestion], summary: dict) -> bytes:
@@ -356,13 +338,13 @@ def create_pdf_report(suggestions: List[Suggestion], summary: dict) -> bytes:
         
     except RuntimeError:
         print("경고: NanumGothic 폰트 파일 등록에 실패했습니다. 기본 Arial 폰트로 대체합니다.")
-        # 폰트 등록 실패 시, Arial 폰트로 강제 설정 (한글 깨짐 감수)
+        # 폰트 등록 실패 시, Arial 폰트로 강제 설정
         pdf.set_font("Arial", "", 10)
 
     pdf.add_page()
     pdf.set_auto_page_break(auto=True, margin=15)
     
-    # ------------------------------------
+
     # 제목
     pdf.set_font("NanumGothic", "B", 16) 
     pdf.cell(0, 10, "CloudSaver 비용 절감 보고서", 0, 1, "C") 
@@ -402,7 +384,6 @@ def create_pdf_report(suggestions: List[Suggestion], summary: dict) -> bytes:
         start_y = pdf.get_y()
         
         # 2. Reason 필드만 먼저 MultiCell로 출력하여 셀 높이 결정
-        # Border는 0으로 지정하여 일단 테두리를 그리지 않고 높이만 측정합니다.
         pdf.set_xy(start_x + sum(col_widths[:-1]), start_y)
         pdf.multi_cell(col_widths[-1], 7, s.reason, 0, "L", 0)
         
@@ -422,21 +403,14 @@ def create_pdf_report(suggestions: List[Suggestion], summary: dict) -> bytes:
         pdf.cell(col_widths[3], cell_height, f"{s.estimated_saving:.2f}", 1, 0, "R", 0)
         pdf.cell(col_widths[4], cell_height, f"{s.current_cost:.2f}", 1, 0, "R", 0)
         
-        # 6. Reason 셀 (MultiCell)을 텍스트와 테두리를 함께 출력하고, 다음 줄로 자동 이동(ln=1)
-        # Reason 텍스트와 테두리를 한 번에 출력 (가장 안정적인 방식)
-        # 주의: MultiCell은 출력이 끝나면 Y축만 이동하므로 X축을 초기화해야 합니다.
+        # 6. Reason 셀 (MultiCell)을 텍스트와 테두리를 함께 출력하고, 다음 줄로 자동 이동(ln=1).
         pdf.multi_cell(col_widths[-1], 7, s.reason, 1, "L", 0)
-        
-        # 🚨🚨🚨 이 줄이 없으면 다음 행이 잘못된 X 위치에서 시작됩니다. 🚨🚨🚨
-        # X축을 다음 행 시작점(start_x)으로 명확하게 초기화
         pdf.set_x(start_x)
 
     return pdf.output(dest='S')
 
-# --------------------------------------
-# 리포트 다운로드 엔드포인트 (수정됨)
-# --------------------------------------
 
+# 리포트 다운로드 엔드포인트 
 @app.post("/download_report")
 async def download_report(data: AnalyzeResponse, format: str = "csv"): # 👈 format 파라미터 추가
     """
@@ -481,7 +455,6 @@ async def download_report(data: AnalyzeResponse, format: str = "csv"): # 👈 fo
         ]
         df = df[columns_order]
 
-        # 컬럼 이름 한글로 변경
         df.rename(columns={
             "cloud": "클라우드",
             "service": "서비스",
