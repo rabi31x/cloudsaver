@@ -12,7 +12,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import * as S from "../styles/dashboardViewStyles"; 
+import * as S from "../styles/dashboardViewStyles";
 
 const CLOUD_TABS = [
   { id: "ALL", label: "All Cloud" },
@@ -21,7 +21,11 @@ const CLOUD_TABS = [
   { id: "Google Cloud", label: "Google Cloud" },
 ];
 
-const CLOUD_COLORS = ["#4B5563", "#9CA3AF", "#D1D5DB"];
+const CLOUD_COLOR_MAP = {
+  "AWS": "#FF9900",
+  "Azure": "#003399", // 진한 파랑
+  "Google Cloud": "#4285F4", // 밝은 파랑
+};
 
 function EmptyChart() {
   return (
@@ -63,7 +67,7 @@ export default function DashboardView({ data, onNew }) {
   // ✨ handleDownloadReport 함수를 format을 받도록 수정
   // src/pages/DashboardView.jsx (handleDownloadReport 함수 전체)
 
-const handleDownloadReport = async (format) => {
+  const handleDownloadReport = async (format) => {
     setShowDropdown(false); // 드롭다운 닫기
 
     try {
@@ -86,7 +90,7 @@ const handleDownloadReport = async (format) => {
       const url = URL.createObjectURL(blob);
 
       // 3. 파일명 설정: format에 따라 확장자 지정
-      const filename = `cloudsaver_report.${format}`; 
+      const filename = `cloudsaver_report.${format}`;
 
       const a = document.createElement("a");
       a.href = url;
@@ -98,8 +102,8 @@ const handleDownloadReport = async (format) => {
       console.error("다운로드 중 오류 발생:", error);
       alert(`리포트 다운로드에 실패했습니다: ${error.message}`);
     }
-};
-  
+  };
+
   return (
     <div style={S.container}>
       {/* 상단 요약 + 버튼 */}
@@ -122,16 +126,16 @@ const handleDownloadReport = async (format) => {
         </div>
 
         <div style={S.buttonGroupStyle}>
-          {/* ✨ 드롭다운 컨테이너 추가 */}
-          <div style={S.dropdownContainer}> 
-            <button 
-              type="button" 
-              onClick={() => setShowDropdown(!showDropdown)} 
+          {/* 드롭다운 컨테이너 추가 */}
+          <div style={S.dropdownContainer}>
+            <button
+              type="button"
+              onClick={() => setShowDropdown(!showDropdown)}
               style={S.pillButton}
             >
-              Report Download ⬇️
+              Report Download
             </button>
-            
+
             {showDropdown && (
               <div style={S.dropdownMenu}>
                 <button onClick={() => handleDownloadReport('csv')} style={S.dropdownItem}>
@@ -143,11 +147,8 @@ const handleDownloadReport = async (format) => {
               </div>
             )}
           </div>
-          {/* ✨ 드롭다운 관련 끝 */}
+          {/* 드롭다운 관련 끝 */}
 
-          <button type="button" style={S.pillButton}>
-            Save
-          </button>
           <button type="button" style={S.pillButton} onClick={onNew}>
             ＋ NEW
           </button>
@@ -189,18 +190,17 @@ const handleDownloadReport = async (format) => {
                 key={`${s.resource_id}-${idx}`}
                 style={{
                   ...S.solutionCard,
-                  // 우선순위에 따른 border-left 스타일 로직은 그대로 유지
                   borderLeft:
                     s.priority === "HIGH"
                       ? "3px solid #ef4444"
                       : s.priority === "MEDIUM"
-                      ? "3px solid #f59e0b"
-                      : "3px solid #9ca3af",
+                        ? "3px solid #f59e0b"
+                        : "3px solid #9ca3af",
                 }}
               >
                 <div style={S.cardHeaderStyle}>
                   <div style={S.cardTitleStyle}>
-                    [{s.cloud}] {s.service} – {s.action}
+                    [{s.cloud}] {s.service} {s.action}
                   </div>
                   <div style={S.categoryBadgeStyle}>
                     {s.category}
@@ -245,7 +245,7 @@ const handleDownloadReport = async (format) => {
                     {cloudCostData.map((entry, index) => (
                       <Cell
                         key={`slice-${index}`}
-                        fill={CLOUD_COLORS[index % CLOUD_COLORS.length]}
+                        fill={CLOUD_COLOR_MAP[entry.name] || "#CCCCCC"}
                       />
                     ))}
                   </Pie>
@@ -268,7 +268,18 @@ const handleDownloadReport = async (format) => {
                   <XAxis dataKey="name" />
                   <YAxis />
                   <Tooltip />
-                  <Bar dataKey="saving" radius={[4, 4, 0, 0]} />
+                  <Bar
+                    dataKey="saving"
+                    radius={[4, 4, 0, 0]}
+                    barSize={30}
+                  >
+                    {cloudSavingData.map((entry, index) => (
+                      <Cell
+                        key={`bar-cell-${index}`}
+                        fill={CLOUD_COLOR_MAP[entry.name] || "#CCCCCC"}
+                      />
+                    ))}
+                  </Bar>
                 </BarChart>
               </ResponsiveContainer>
             )}
@@ -278,3 +289,4 @@ const handleDownloadReport = async (format) => {
     </div>
   );
 }
+

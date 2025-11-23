@@ -1,6 +1,5 @@
 // src/styles/dashboardViewStyles.js
 
-// 기존 스타일 (유지)
 export const container = {
   width: "90%",
   maxWidth: 1200,
@@ -94,6 +93,7 @@ export const chartCard = {
   border: "1px solid #e5e7eb",
   padding: 16,
   height: 220,
+  paddingBottom: 30,
 };
 
 // ✨ 추가된 스타일
