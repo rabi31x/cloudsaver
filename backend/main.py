@@ -1,29 +1,35 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from pydantic import BaseModel
-from io import StringIO
+from io import StringIO, BytesIO
 from starlette.responses import StreamingResponse
-from fpdf import FPDF # 👈 FPDF 라이브러리 임포트 추가
 
 import pandas as pd
 import math
 
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+from reportlab.lib.pagesizes import A4
+from reportlab.lib import colors
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.lib.units import mm
+
 app = FastAPI(
-title="CloudSaver (CS) Backend",
-description="멀티 클라우드 비용 CSV를 분석해서 절감 제안을 반환하는 API",
-version="0.1.0",
+    title="CloudSaver (CS) Backend",
+    description="멀티 클라우드 비용 CSV를 분석해서 절감 제안을 반환하는 API",
+    version="0.1.0",
 )
 
 # 프론트엔드 도메인 허용 (개발용)
 app.add_middleware(
-CORSMiddleware,
-allow_origins=["http://localhost:3000"], 
-allow_credentials=True,
-allow_methods=["*"],
-allow_headers=["*"],
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
-
 
 
 # Pydantic 모델 (응답 스키마)
@@ -36,19 +42,19 @@ class Suggestion(BaseModel):
     reason: str
     current_cost: float
     estimated_saving: float
-    source: str # 파일명 (aws / azure / gcp)
-    priority: str 
+    source: str  # 파일명 (aws / azure / gcp)
+    priority: str
 
 
 class AnalyzeResponse(BaseModel):
-    summary: dict
-    by_cloud: dict
-    by_category: dict
+    summary: Dict[str, Any]
+    by_cloud: Dict[str, Any]
+    by_category: Dict[str, Any]
     suggestions: List[Suggestion]
 
 
 
-# 유틸 함수들
+# 유틸 함수
 def _infer_cloud_from_filename(filename: str) -> str:
     name = filename.lower()
     if "aws" in name:
@@ -58,6 +64,7 @@ def _infer_cloud_from_filename(filename: str) -> str:
     if "gcp" in name or "google" in name:
         return "Google Cloud"
     return "Unknown"
+
 
 def _infer_category(service: str) -> str:
     s = (service or "").lower()
@@ -70,12 +77,14 @@ def _infer_category(service: str) -> str:
         return "DB"
     return "OTHER"
 
+
 def _find_cost_column(df: pd.DataFrame) -> str:
     candidates = ["cost", "Cost", "UnblendedCost", "unblended_cost", "Amount"]
     for c in candidates:
         if c in df.columns:
             return c
     raise KeyError("비용(cost) 컬럼을 찾을 수 없습니다. CSV 컬럼명을 확인해주세요.")
+
 
 def _safe_float(x) -> float:
     try:
@@ -166,6 +175,8 @@ def apply_rules(df: pd.DataFrame) -> List[Suggestion]:
 
     # 일정 비용 이상 On-Demand → 할인 요금제 전환 (R4)
     if {"discount_type", "cost"}.issubset(df.columns):
+        # discount_type이 NaN이면 str.upper()에서 에러 나므로 fillna 처리
+        df["discount_type"] = df["discount_type"].fillna("")
         mask = (df["discount_type"].str.upper() == "ONDEMAND") & (df["cost"] >= 50)
 
         for _, row in df[mask].iterrows():
@@ -190,7 +201,6 @@ def apply_rules(df: pd.DataFrame) -> List[Suggestion]:
     return suggestions
 
 
-
 # 루트 체크용
 @app.get("/")
 def read_root():
@@ -211,7 +221,7 @@ async def analyze(files: List[UploadFile] = File(...)):
         try:
             text = raw.decode("utf-8-sig")
         except UnicodeDecodeError:
-            text = raw.decode("cp949")  # 한글 인코딩
+            text = raw.decode("cp949")  # 한글 인코딩 대응
 
         df = pd.read_csv(StringIO(text))
 
@@ -263,7 +273,7 @@ async def analyze(files: List[UploadFile] = File(...)):
 
     data = pd.concat(frames, ignore_index=True)
 
-    # 숫자형 컬럼 강제 변환 (에러는 NaN으로)
+    # 숫자형 컬럼 강제 변환 (에러는 NaN → 0)
     for col in ["cost", "cpu_avg", "days", "storage_idle_days"]:
         if col in data.columns:
             data[col] = pd.to_numeric(data[col], errors="coerce").fillna(0)
@@ -320,98 +330,181 @@ async def analyze(files: List[UploadFile] = File(...)):
     return response
 
 
-# PDF 생성 로직(미완성)
-
+# PDF 생성 로직
 def create_pdf_report(suggestions: List[Suggestion], summary: dict) -> bytes:
-    """분석 결과를 기반으로 간단한 PDF 보고서를 생성합니다."""
-    # FPDF 객체 생성
-    pdf = FPDF()
+    """ReportLab로 CloudSaver 기본형 PDF 보고서 생성"""
+    buffer = BytesIO()
 
-    # NanumGothic 폰트 등록
+    # 문서 기본 설정 (A4, 여백)
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=A4,
+        leftMargin=20 * mm,
+        rightMargin=20 * mm,
+        topMargin=20 * mm,
+        bottomMargin=20 * mm,
+    )
+
+    # ---------------- 폰트 설정 ----------------
+    # 기본값
+    base_font = "Helvetica"
+
     try:
-        pdf.add_font('NanumGothic', '', 'NanumGothic.ttf', uni=True)
-        pdf.add_font('NanumGothic', 'B', 'NanumGothicBold.ttf', uni=True) 
-        
-        # 폰트 등록 성공 시, NanumGothic으로 강제 설정
-        pdf.set_font('NanumGothic', '', 10) 
-        
-    except RuntimeError:
-        print("경고: NanumGothic 폰트 파일 등록에 실패했습니다. 기본 Arial 폰트로 대체합니다.")
-        # 폰트 등록 실패 시, Arial 폰트로 강제 설정
-        pdf.set_font("Arial", "", 10)
+        pdfmetrics.registerFont(TTFont("NanumGothic", "NanumGothic.ttf"))
+        pdfmetrics.registerFont(TTFont("NanumGothic-Bold", "NanumGothicBold.ttf"))
+        base_font = "NanumGothic"
+    except Exception as e:
+        print(f"경고: 나눔고딕 등록 실패, 기본 폰트 사용: {e}")
 
-    pdf.add_page()
-    pdf.set_auto_page_break(auto=True, margin=15)
-    
+    styles = getSampleStyleSheet()
 
-    # 제목
-    pdf.set_font("NanumGothic", "B", 16) 
-    pdf.cell(0, 10, "CloudSaver 비용 절감 보고서", 0, 1, "C") 
-    pdf.ln(5)
+    title_style = ParagraphStyle(
+        "TitleK",
+        parent=styles["Title"],
+        fontName=base_font,
+        fontSize=16,
+        leading=20,
+        alignment=1,
+        spaceAfter=12,
+    )
 
-    # 1. 요약 정보
-    pdf.set_fill_color(230, 230, 230)
-    pdf.set_font("NanumGothic", "B", 12)
-    pdf.cell(0, 8, "1. Summary", 0, 1, 'L', 1)
-    
-    pdf.set_font("NanumGothic", "", 10) # 레귤러 스타일
-    pdf.cell(0, 6, f"Total Cost: ${summary.get('total_cost', 0):,.0f}", 0, 1)
-    pdf.cell(0, 6, f"Total Estimated Saving: ${summary.get('total_saving', 0):,.0f}", 0, 1)
-    pdf.cell(0, 6, f"Saving Rate: {summary.get('saving_rate', 0):.1f}%", 0, 1)
-    pdf.ln(5)
+    section_title_style = ParagraphStyle(
+        "SectionTitleK",
+        parent=styles["Heading2"],
+        fontName=base_font,
+        fontSize=11,
+        leading=14,
+        spaceBefore=6,
+        spaceAfter=6,
+    )
 
-    # 2. 상세 제안
-    pdf.set_font("NanumGothic", "B", 12)
-    pdf.cell(0, 8, f"2. Detailed Suggestions ({len(suggestions)} items)", 0, 1, 'L', 1)
-    
-    pdf.set_font("NanumGothic", "", 9) # 레귤러 스타일로 복귀
-    col_widths = [15, 30, 30, 25, 25, 55]
-    
-    # 테이블 헤더
+    normal_style = ParagraphStyle(
+        "NormalK",
+        parent=styles["Normal"],
+        fontName=base_font,
+        fontSize=9,
+        leading=11,
+    )
+
+    header_style = ParagraphStyle(
+        "HeaderK",
+        parent=styles["Normal"],
+        fontName=base_font,
+        fontSize=9,
+        leading=11,
+        alignment=1, 
+    )
+
+    elements = []
+
+    # ---------------- 제목 ----------------
+    elements.append(Paragraph("CloudSaver 비용 절감 보고서", title_style))
+    elements.append(Spacer(1, 6))
+
+    # ---------------- 1. Summary ----------------
+    elements.append(Paragraph("1. Summary", section_title_style))
+    elements.append(
+        Paragraph(
+            f"Total Cost: ${summary.get('total_cost', 0):,.0f}",
+            normal_style,
+        )
+    )
+    elements.append(
+        Paragraph(
+            f"Total Estimated Saving: ${summary.get('total_saving', 0):,.0f}",
+            normal_style,
+        )
+    )
+    elements.append(
+        Paragraph(
+            f"Saving Rate: {summary.get('saving_rate', 0):.1f}%",
+            normal_style,
+        )
+    )
+    elements.append(Spacer(1, 10))
+
+    # ---------------- 2. Detailed Suggestions ----------------
+    elements.append(
+        Paragraph(
+            f"2. Detailed Suggestions ({len(suggestions)} items)",
+            section_title_style,
+        )
+    )
+    elements.append(Spacer(1, 4))
+
+    # 표 데이터 구성
+    table_data = []
+
+    # 헤더
     headers = ["Cloud", "Service", "Action", "Saving ($)", "Current Cost ($)", "Reason"]
-    pdf.set_fill_color(200, 220, 255) 
-    for i, header in enumerate(headers):
-        pdf.cell(col_widths[i], 7, header, 1, 0, "C", 1)
-    pdf.ln()
+    table_data.append([Paragraph(h, header_style) for h in headers])
 
-    # 데이터 행
-    pdf.set_fill_color(255, 255, 255)
-    
+    # 행 데이터
     for s in suggestions:
-        # 1. MultiCell을 위한 초기 위치 저장
-        start_x = pdf.get_x()
-        start_y = pdf.get_y()
-        
-        # 2. Reason 필드만 먼저 MultiCell로 출력하여 셀 높이 결정
-        pdf.set_xy(start_x + sum(col_widths[:-1]), start_y)
-        pdf.multi_cell(col_widths[-1], 7, s.reason, 0, "L", 0)
-        
-        # 3. MultiCell의 실제 높이를 계산
-        end_y = pdf.get_y()
-        cell_height = end_y - start_y
-        
-        # 4. 커서 위치를 행 시작점(start_x, start_y)으로 복귀
-        pdf.set_xy(start_x, start_y)
-        
-        # 5. 모든 셀을 행의 높이(cell_height)에 맞추어 출력 (내용+테두리 한 번에)
-        
-        # Reason 열을 제외한 5개 열 (Cell)
-        pdf.cell(col_widths[0], cell_height, s.cloud, 1, 0, "L", 0)
-        pdf.cell(col_widths[1], cell_height, s.service, 1, 0, "L", 0)
-        pdf.cell(col_widths[2], cell_height, s.action, 1, 0, "L", 0)
-        pdf.cell(col_widths[3], cell_height, f"{s.estimated_saving:.2f}", 1, 0, "R", 0)
-        pdf.cell(col_widths[4], cell_height, f"{s.current_cost:.2f}", 1, 0, "R", 0)
-        
-        # 6. Reason 셀 (MultiCell)을 텍스트와 테두리를 함께 출력하고, 다음 줄로 자동 이동(ln=1).
-        pdf.multi_cell(col_widths[-1], 7, s.reason, 1, "L", 0)
-        pdf.set_x(start_x)
+        row = [
+            Paragraph(str(s.cloud), normal_style),
+            Paragraph(str(s.service), normal_style),
+            Paragraph(str(s.action), normal_style),
+            Paragraph(f"{s.estimated_saving:.2f}", normal_style),
+            Paragraph(f"{s.current_cost:.2f}", normal_style),
+            Paragraph(str(s.reason), normal_style),
+        ]
+        table_data.append(row)
 
-    return pdf.output(dest='S')
+    # 컬럼 너비 설정
+    total_width = doc.width
+    col_widths = [
+        20 * mm,   # Cloud
+        25 * mm,   # Service
+        40 * mm,   # Action
+        22 * mm,   # Saving
+        25 * mm,   # Current Cost
+        total_width - (20 + 25 + 40 + 22 + 25) * mm,
+    ]
+
+    table = Table(table_data, colWidths=col_widths, repeatRows=1)
+
+    # 표 스타일
+    table.setStyle(
+        TableStyle(
+            [
+                # 전체 폰트
+                ("FONTNAME", (0, 0), (-1, -1), base_font),
+                ("FONTSIZE", (0, 0), (-1, -1), 9),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+
+                # 헤더 스타일
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#c8ddff")),
+                ("ALIGN", (0, 0), (-1, 0), "CENTER"),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.black),
+
+                # 숫자 오른쪽 정렬
+                ("ALIGN", (3, 1), (4, -1), "RIGHT"),
+
+                # 그리드 라인
+                ("GRID", (0, 0), (-1, -1), 0.5, colors.black),
+
+                # 행 간 약간 여백
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+                ("TOPPADDING", (0, 0), (-1, -1), 3),
+            ]
+        )
+    )
+
+    elements.append(table)
+
+    # PDF 빌드
+    doc.build(elements)
+
+    pdf_bytes = buffer.getvalue()
+    buffer.close()
+    return pdf_bytes
 
 
-# 리포트 다운로드 엔드포인트 
+
+# 리포트 다운로드 엔드포인트
 @app.post("/download_report")
-async def download_report(data: AnalyzeResponse, format: str = "csv"): # 👈 format 파라미터 추가
+async def download_report(data: AnalyzeResponse, format: str = "csv"):
     """
     분석 결과를 받아 지정된 포맷(csv 또는 pdf)으로 반환합니다.
     """
@@ -421,66 +514,66 @@ async def download_report(data: AnalyzeResponse, format: str = "csv"): # 👈 fo
     # 1. PDF 포맷 요청 처리
     if format.lower() == "pdf":
         try:
-            pdf_bytes = create_pdf_report(data.suggestions, data.summary)
-            
+            pdf_bytes = create_pdf_report(data.suggestions, data.summary)           
             return StreamingResponse(
-                iter([pdf_bytes]),
+                BytesIO(pdf_bytes),
                 media_type="application/pdf",
-                headers={
-                    "Content-Disposition": "attachment; filename=cloudsaver_report.pdf"
-                }
+                headers={"Content-Disposition": "attachment; filename=cloudsaver_report.pdf"},  
             )
-        except Exception as e:
-            # FPDF 에러 발생 시 처리
-            print(f"PDF 생성 오류: {e}")
-            raise HTTPException(status_code=500, detail=f"PDF 생성 중 오류가 발생했습니다. (폰트 문제일 수 있음): {e}")
 
-    # 2. CSV 포맷 요청 처리 (기존 로직)
+        except Exception as e:
+            print(f"PDF 생성 오류: {e}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"PDF 생성 중 오류가 발생했습니다. (폰트 문제일 수 있음): {e}",
+            )
+
+    # 2. CSV 포맷 요청 처리
     elif format.lower() == "csv":
         suggestions_data = [s.dict() for s in data.suggestions]
-
         df = pd.DataFrame(suggestions_data)
 
-        # 필요한 컬럼만 선택하고 순서 변경 (가독성 향상)
         columns_order = [
-            "cloud", 
-            "service", 
-            "action", 
-            "priority", 
-            "estimated_saving", 
-            "current_cost", 
-            "reason", 
-            "source"
+            "cloud",
+            "service",
+            "action",
+            "priority",
+            "estimated_saving",
+            "current_cost",
+            "reason",
+            "source",
         ]
         df = df[columns_order]
 
-        df.rename(columns={
-            "cloud": "클라우드",
-            "service": "서비스",
-            "action": "제안 액션",
-            "priority": "우선순위",
-            "estimated_saving": "예상 절감액 ($)",
-            "current_cost": "현재 비용 ($)",
-            "reason": "제안 이유",
-            "source": "원본 파일"
-        }, inplace=True)
-        
-        # CSV 문자열 생성
+        df.rename(
+            columns={
+                "cloud": "클라우드",
+                "service": "서비스",
+                "action": "제안 액션",
+                "priority": "우선순위",
+                "estimated_saving": "예상 절감액 ($)",
+                "current_cost": "현재 비용 ($)",
+                "reason": "제안 이유",
+                "source": "원본 파일",
+            },
+            inplace=True,
+        )
+
         csv_stream = StringIO()
-        df.to_csv(csv_stream, index=False, encoding='utf-8-sig') 
-        
+        df.to_csv(csv_stream, index=False, encoding="utf-8-sig")
         csv_stream.seek(0)
-        
-        # 스트리밍 응답으로 CSV 파일 반환
+
         return StreamingResponse(
             iter([csv_stream.read()]),
             media_type="text/csv",
             headers={
                 "Content-Disposition": "attachment; filename=cloudsaver_report.csv"
-            }
+            },
         )
 
     # 3. 지원하지 않는 포맷 요청 처리
     else:
-        raise HTTPException(status_code=400, detail="지원하지 않는 포맷입니다. (csv 또는 pdf를 사용하세요.)")
-        
+        raise HTTPException(
+            status_code=400,
+            detail="지원하지 않는 포맷입니다. (csv 또는 pdf를 사용하세요.)",
+        )
