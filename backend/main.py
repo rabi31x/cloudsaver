@@ -320,8 +320,7 @@ async def analyze(files: List[UploadFile] = File(...)):
     return response
 
 
-# PDF 생성 로직
-# main.py 파일 내 create_pdf_report 함수 수정 (전체)
+# PDF 생성 로직(미완성)
 
 def create_pdf_report(suggestions: List[Suggestion], summary: dict) -> bytes:
     """분석 결과를 기반으로 간단한 PDF 보고서를 생성합니다."""
